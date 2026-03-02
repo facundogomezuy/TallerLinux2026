@@ -1,0 +1,94 @@
+---
+- hosts: nfs
+  become: yes
+  tasks:
+
+    - name: Instalar NFS
+      dnf:
+        name: nfs-utils
+        state: present
+
+    - name: Crear directorio
+      file:
+        path: /srv/nfs/shared
+        state: directory
+        mode: '0777'
+
+    - name: Crear archivo de prueba
+      copy:
+        dest: /srv/nfs/shared/README-NFS.txt
+        content: "Hola desde NFS"
+
+    - name: Configurar exports
+      copy:
+        dest: /etc/exports
+        content: "/srv/nfs/shared 192.168.10.0/24(rw,sync,no_root_squash)"
+
+    - name: Habilitar NFS
+      service:
+        name: nfs-server
+        state: started
+        enabled: yes
+
+    - name: Abrir firewall
+      firewalld:
+        service: nfs
+        permanent: yes
+        state: enabled
+
+    - name: Reload firewall
+      command: firewall-cmd --reload
+
+
+- hosts: app
+  become: yes
+  tasks:
+
+    - name: Instalar paquetes
+      apt:
+        name:
+          - autofs
+          - nfs-common
+          - python3
+        state: present
+        update_cache: yes
+
+    - name: Configurar auto.master
+      copy:
+        dest: /etc/auto.master.d/nfs.autofs
+        content: "/mnt /etc/auto.nfs --timeout=60"
+
+    - name: Configurar auto.nfs
+      copy:
+        dest: /etc/auto.nfs
+        content: "shared -fstype=nfs nfs01:/srv/nfs/shared"
+
+    - name: Habilitar autofs
+      service:
+        name: autofs
+        state: started
+        enabled: yes
+
+    - name: Crear servicio HTTP
+      copy:
+        dest: /etc/systemd/system/shared-http.service
+        content: |
+          [Unit]
+          Description=Shared HTTP Server
+          After=network.target autofs.service
+
+          [Service]
+          ExecStart=/usr/bin/python3 -m http.server 8080 --directory /mnt/shared
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Recargar systemd
+      command: systemctl daemon-reexec
+
+    - name: Habilitar servicio HTTP
+      service:
+        name: shared-http
+        state: started
+        enabled: yes
